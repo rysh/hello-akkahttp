@@ -1,68 +1,44 @@
 package com.example
 import akka.actor.ActorSystem
+import akka.stream.scaladsl._
+import akka.util.ByteString
 import akka.http.scaladsl.Http
-import akka.stream.ActorMaterializer
-import akka.Done
-import akka.http.scaladsl.server.Route
+import akka.http.scaladsl.model.{HttpEntity, ContentTypes}
 import akka.http.scaladsl.server.Directives._
-import akka.http.scaladsl.model.StatusCodes
-import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport._
-import spray.json.DefaultJsonProtocol._
-
+import akka.stream.ActorMaterializer
+import scala.util.Random
 import scala.io.StdIn
-
-import scala.concurrent.Future
 /**
   * Created by rysh on 2017/01/10.
   */
 object WebServer {
 
-  // domain model
-  final case class Item(name: String, id: Long)
-  final case class Order(items: List[Item])
-
-  // formats for unmarshalling and marshalling
-  implicit val itemFormat = jsonFormat2(Item)
-  implicit val orderFormat = jsonFormat1(Order)
-
-  // (fake) async database query api
-  def fetchItem(itemId: Long): Future[Option[Item]] = ???
-  def saveOrder(order: Order): Future[Done] = ???
-
   def main(args: Array[String]) {
 
-    // needed to run the route
     implicit val system = ActorSystem()
     implicit val materializer = ActorMaterializer()
-    // needed for the future map/flatmap in the end
+    // needed for the future flatMap/onComplete in the end
     implicit val executionContext = system.dispatcher
 
-    val route: Route =
-      get {
-        pathPrefix("item" / LongNumber) { id =>
-          // there might be no item for a given id
-          println(id)
-          val maybeItem: Future[Option[Item]] = fetchItem(id)
+    // streams are re-usable so we can define it here
+    // and use it for every request
+    val numbers = Source.fromIterator(() =>
+      Iterator.continually(Random.nextInt()))
 
-          onSuccess(maybeItem) {
-            case Some(item) => complete(item)
-            case None       => complete(StatusCodes.NotFound)
-          }
+    val route =
+      path("random") {
+        get {
+          complete(
+            HttpEntity(
+              ContentTypes.`text/plain(UTF-8)`,
+              // transform each number to a chunk of bytes
+              numbers.map(n => ByteString(s"$n\n"))
+            )
+          )
         }
-      } ~
-        post {
-          path("create-order") {
-            entity(as[Order]) { order =>
-              val saved: Future[Done] = saveOrder(order)
-              onComplete(saved) { done =>
-                complete("order created")
-              }
-            }
-          }
-        }
+      }
 
     val bindingFuture = Http().bindAndHandle(route, "localhost", 8080)
-
     println(s"Server online at http://localhost:8080/\nPress RETURN to stop...")
     StdIn.readLine() // let it run until user presses return
     bindingFuture
